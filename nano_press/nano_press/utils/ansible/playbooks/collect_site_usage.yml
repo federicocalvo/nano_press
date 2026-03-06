@@ -1,0 +1,64 @@
+- hosts: all
+  become: true
+  vars:
+    project_name: "{{ bench_name | regex_replace('[^a-zA-Z0-9_-]', '_') | lower }}"
+    db_container: "{{ project_name }}-db-1"
+    backend_container: "{{ project_name }}-backend-1"
+  tasks:
+
+    - name: Get database size in MB
+      ansible.builtin.shell: |
+        docker exec {{ db_container }} mysql \
+          -u{{ db_root_username }} \
+          -p{{ db_password }} \
+          --skip-column-names \
+          -e "SELECT IFNULL(ROUND(SUM(data_length + index_length) / 1024 / 1024, 2), 0) \
+              FROM information_schema.TABLES WHERE table_schema='{{ site_name }}';" \
+          2>/dev/null || echo "0"
+      register: db_size_out
+      ignore_errors: true
+
+    - name: Get database free space in MB
+      ansible.builtin.shell: |
+        docker exec {{ db_container }} mysql \
+          -u{{ db_root_username }} \
+          -p{{ db_password }} \
+          --skip-column-names \
+          -e "SELECT IFNULL(ROUND(SUM(data_free) / 1024 / 1024, 2), 0) \
+              FROM information_schema.TABLES WHERE table_schema='{{ site_name }}';" \
+          2>/dev/null || echo "0"
+      register: db_free_out
+      ignore_errors: true
+
+    - name: Get public files size in MB
+      ansible.builtin.shell: |
+        docker exec {{ backend_container }} \
+          du -sm /home/frappe/frappe-bench/sites/{{ site_name }}/public/files \
+          2>/dev/null | awk '{print $1}' || echo "0"
+      register: public_out
+      ignore_errors: true
+
+    - name: Get private files size in MB
+      ansible.builtin.shell: |
+        docker exec {{ backend_container }} \
+          du -sm /home/frappe/frappe-bench/sites/{{ site_name }}/private/files \
+          2>/dev/null | awk '{print $1}' || echo "0"
+      register: private_out
+      ignore_errors: true
+
+    - name: Get backups size in MB
+      ansible.builtin.shell: |
+        docker exec {{ backend_container }} \
+          du -sm /home/frappe/frappe-bench/sites/{{ site_name }}/private/backups \
+          2>/dev/null | awk '{print $1}' || echo "0"
+      register: backups_out
+      ignore_errors: true
+
+    - name: Emit usage as JSON
+      ansible.builtin.debug:
+        msg:
+          database: "{{ db_size_out.stdout | trim | default('0') }}"
+          database_free: "{{ db_free_out.stdout | trim | default('0') }}"
+          public: "{{ public_out.stdout | trim | default('0') }}"
+          private: "{{ private_out.stdout | trim | default('0') }}"
+          backups: "{{ backups_out.stdout | trim | default('0') }}"

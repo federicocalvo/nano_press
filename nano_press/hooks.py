@@ -156,6 +156,9 @@ scheduler_events = {
 		"*/5 * * * *": [
 			"nano_press.utils.ansible_runner.ping_server",
 		],
+		"0 * * * *": [
+			"nano_press.nano_press.doctype.frappe_site.frappe_site.collect_all_sites_usage",
+		],
 	}
 }
 
