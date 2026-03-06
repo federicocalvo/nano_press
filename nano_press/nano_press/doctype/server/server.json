@@ -34,7 +34,9 @@
 		"traefik_deployed",
 		"traefik_version",
 		"section_break_blcq",
-		"last_prepared_at"
+		"last_prepared_at",
+		"metrics_tab",
+		"metrics_html"
 	],
 	"fields": [
 		{
@@ -206,6 +208,16 @@
 			"fieldtype": "Datetime",
 			"label": "Last Prepared at",
 			"read_only": 1
+		},
+		{
+			"fieldname": "metrics_tab",
+			"fieldtype": "Tab Break",
+			"label": "Server Metrics"
+		},
+		{
+			"fieldname": "metrics_html",
+			"fieldtype": "HTML",
+			"label": "Metrics"
 		},
 		{
 			"fieldname": "created_by",

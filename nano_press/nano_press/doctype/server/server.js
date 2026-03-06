@@ -1,6 +1,16 @@
 // Copyright (c) 2025, Venkatesh M and contributors
 // For license information, please see license.txt
 
+// Metrics history accumulates samples across refreshes for the time-series charts.
+let _metrics_history = {
+	labels: [],
+	cpu: [],
+	ram: [],
+	io_read: [],
+	io_write: [],
+};
+const MAX_SAMPLES = 10;
+
 frappe.ui.form.on('Server', {
 	refresh(frm) {
 		// avoid duplicate buttons
@@ -100,6 +110,151 @@ frappe.ui.form.on('Server', {
 						});
 					});
 				}
+			},
+		});
+
+		// Load server metrics for the Metrics tab (only for saved docs)
+		if (!frm.is_new()) {
+			frm.add_custom_button(
+				__('Refresh Metrics'),
+				() => frm.trigger('load_metrics'),
+				__('Actions'),
+			);
+			frm.trigger('load_metrics');
+		}
+	},
+
+	load_metrics(frm) {
+		if (frm.is_new() || !frm.fields_dict.metrics_html) return;
+
+		const $wrapper = $(frm.fields_dict.metrics_html.wrapper);
+
+		$wrapper.html(`
+			<div style="padding:12px">
+				<div style="display:grid; grid-template-columns: 1fr 1fr; gap:16px;">
+					<div>
+						<p class="text-muted text-center" style="margin-bottom:4px">${__('CPU %')}</p>
+						<div id="np-chart-cpu"></div>
+					</div>
+					<div>
+						<p class="text-muted text-center" style="margin-bottom:4px">${__('RAM %')}</p>
+						<div id="np-chart-ram"></div>
+					</div>
+					<div>
+						<p class="text-muted text-center" style="margin-bottom:4px">${__('Disk Usage')}</p>
+						<div id="np-chart-disk"></div>
+					</div>
+					<div>
+						<p class="text-muted text-center" style="margin-bottom:4px">${__('Disk I/O (MB since boot)')}</p>
+						<div id="np-chart-io"></div>
+					</div>
+				</div>
+				<p class="text-muted" style="margin-top:8px;font-size:11px;text-align:right">
+					${__('Last updated')}: <span id="np-metrics-ts">—</span>
+				</p>
+			</div>
+		`);
+
+		frappe.call({
+			method: 'nano_press.nano_press.doctype.server.server.get_server_metrics',
+			args: { server_name: frm.doc.name },
+			freeze: false,
+			callback(r) {
+				if (r.exc || !r.message) return;
+
+				const d = r.message;
+				const now = frappe.datetime.now_time();
+
+				// Accumulate samples for time-series charts (capped at MAX_SAMPLES)
+				_metrics_history.labels.push(now);
+				_metrics_history.cpu.push(d.cpu_percent);
+				_metrics_history.ram.push(d.ram_percent);
+				_metrics_history.io_read.push(d.io_read_mb);
+				_metrics_history.io_write.push(d.io_write_mb);
+
+				if (_metrics_history.labels.length > MAX_SAMPLES) {
+					Object.keys(_metrics_history).forEach(
+						(k) => _metrics_history[k].shift(),
+					);
+				}
+
+				// CPU — area line chart
+				new frappe.Chart('#np-chart-cpu', {
+					data: {
+						labels: _metrics_history.labels,
+						datasets: [
+							{ name: __('CPU'), values: _metrics_history.cpu },
+						],
+					},
+					type: 'line',
+					height: 160,
+					colors: ['#5e64ff'],
+					axisOptions: { xIsSeries: true },
+					lineOptions: { hideDots: 1, regionFill: 1 },
+					tooltipOptions: { formatTooltipY: (v) => v + '%' },
+				});
+
+				// RAM — area line chart
+				new frappe.Chart('#np-chart-ram', {
+					data: {
+						labels: _metrics_history.labels,
+						datasets: [
+							{ name: __('RAM'), values: _metrics_history.ram },
+						],
+					},
+					type: 'line',
+					height: 160,
+					colors: ['#ff5858'],
+					axisOptions: { xIsSeries: true },
+					lineOptions: { hideDots: 1, regionFill: 1 },
+					tooltipOptions: { formatTooltipY: (v) => v + '%' },
+				});
+
+				// Disk — donut chart
+				const fmt_gb = (b) =>
+					(b / 1024 / 1024 / 1024).toFixed(1) + ' GB';
+				new frappe.Chart('#np-chart-disk', {
+					data: {
+						labels: [__('Used'), __('Free')],
+						datasets: [
+							{
+								values: [
+									d.disk_used,
+									d.disk_total - d.disk_used,
+								],
+							},
+						],
+					},
+					type: 'donut',
+					height: 160,
+					colors: ['#f97316', '#e2e8f0'],
+					tooltipOptions: { formatTooltipY: (v) => fmt_gb(v) },
+				});
+
+				// I/O — mixed bar chart
+				new frappe.Chart('#np-chart-io', {
+					data: {
+						labels: _metrics_history.labels,
+						datasets: [
+							{
+								name: __('Read MB'),
+								values: _metrics_history.io_read,
+								chartType: 'bar',
+							},
+							{
+								name: __('Write MB'),
+								values: _metrics_history.io_write,
+								chartType: 'bar',
+							},
+						],
+					},
+					type: 'axis-mixed',
+					height: 160,
+					colors: ['#22c55e', '#a855f7'],
+					axisOptions: { xIsSeries: true },
+				});
+
+				$('#np-metrics-ts').text(now);
 			},
 		});
 	},

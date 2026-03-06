@@ -1,6 +1,7 @@
 # Copyright (c) 2025, Venkatesh M and contributors
 # For license information, please see license.txt
 
+import json
 import os
 import subprocess
 
@@ -244,6 +245,61 @@ def prepare_server(server_name: str, include_traefik: bool = False):
 
 	server = frappe.get_doc("Server", server_name)
 	return server.prepare_server(include_traefik=include_traefik)
+
+
+@frappe.whitelist()
+def get_server_metrics(server_name: str) -> dict:
+	"""Fetch CPU, RAM, Disk, and I/O metrics from a remote server via SSH using psutil."""
+	if not server_name:
+		frappe.throw(frappe._("Server name is required"))
+
+	server = frappe.get_doc("Server", server_name)
+
+	# Build a self-contained python3 one-liner that collects metrics with psutil.
+	# The command is a string literal — no user data is interpolated inside it.
+	cmd = (
+		"python3 -c \""
+		"import psutil, json; "
+		"cpu=psutil.cpu_percent(interval=1); "
+		"ram=psutil.virtual_memory(); "
+		"disk=psutil.disk_usage('/'); "
+		"io=psutil.disk_io_counters(); "
+		"print(json.dumps({"
+		"'cpu_percent': cpu, "
+		"'ram_total': ram.total, 'ram_used': ram.used, 'ram_percent': ram.percent, "
+		"'disk_total': disk.total, 'disk_used': disk.used, 'disk_percent': disk.percent, "
+		"'io_read_mb': round(io.read_bytes/1024/1024,2) if io else 0, "
+		"'io_write_mb': round(io.write_bytes/1024/1024,2) if io else 0"
+		"}))\""
+	)
+
+	ssh_port = str(server.ssh_port or 22)
+	result = subprocess.run(
+		[
+			"ssh",
+			"-p",
+			ssh_port,
+			"-o",
+			"StrictHostKeyChecking=no",
+			"-o",
+			"ConnectTimeout=10",
+			f"{server.ssh_user}@{server.server_ip}",
+			cmd,
+		],
+		capture_output=True,
+		text=True,
+		timeout=20,
+	)
+
+	if result.returncode != 0:
+		frappe.throw(frappe._("Failed to retrieve server metrics: {0}").format(result.stderr.strip()))
+
+	try:
+		return json.loads(result.stdout)
+	except json.JSONDecodeError:
+		frappe.throw(
+			frappe._("Could not parse metrics response from server. Ensure psutil is installed (pip3 install psutil).")
+		)
 
 
 @frappe.whitelist()
