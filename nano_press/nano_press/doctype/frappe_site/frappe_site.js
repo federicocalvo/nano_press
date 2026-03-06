@@ -24,6 +24,11 @@ frappe.ui.form.on('Frappe Site', {
 				)
 				.addClass('btn-warning');
 			frm
+				.add_custom_button(__('Collect Usage'), () =>
+					call_doc_method(frm, 'collect_usage'),
+				)
+				.addClass('btn-secondary');
+			frm
 				.add_custom_button(__('Visit Site'), () =>
 					window.open(`https://${frm.doc.site_url}`),
 				)

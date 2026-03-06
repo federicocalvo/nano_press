@@ -263,6 +263,95 @@ class FrappeSite(Document):
 			return {"status": 500, "message": frappe.utils.cstr(exc)}
 
 
+	@frappe.whitelist()
+	def collect_usage(self) -> dict:
+		"""Run the collect_site_usage playbook and save a Site Usage record.
+
+		Returns:
+			dict: {status, message, data} where data contains the collected metrics.
+		"""
+		if self.status != "Deployed":
+			return {"status": 400, "message": "Site must be in Deployed status to collect usage metrics."}
+
+		db_password = self.get_password("db_password") or ""
+		db_username = self.db_username or "root"
+		site_name = self.site_url or ""
+
+		extra_vars = {
+			"bench_name": self.bench_name,
+			"site_name": site_name,
+			"db_root_username": db_username,
+			"db_password": db_password,
+		}
+
+		try:
+			result = run_playbook(
+				server_name=self.server_name,
+				playbook_path="collect_site_usage.yml",
+				extra_vars=extra_vars,
+			)
+
+			if result.get("status") != "success":
+				raise Exception(
+					f"collect_site_usage.yml failed: {result.get('message', 'Unknown error')}"
+				)
+
+			metrics = _parse_usage_from_result(result.get("data", {}))
+
+			doc = frappe.new_doc("Site Usage")
+			doc.site = self.name
+			doc.database = metrics.get("database", 0)
+			doc.public = metrics.get("public", 0)
+			doc.private = metrics.get("private", 0)
+			doc.backups = metrics.get("backups", 0)
+			doc.database_free = metrics.get("database_free", 0)
+			doc.insert(ignore_permissions=True)
+			frappe.db.commit()
+
+			return {
+				"status": 200,
+				"message": "Usage collected successfully",
+				"data": metrics,
+			}
+
+		except Exception as exc:
+			frappe.log_error(frappe.get_traceback(), "collect_usage failed")
+			return {"status": 500, "message": frappe.utils.cstr(exc)}
+
+
+def _parse_usage_from_result(ansible_data: dict) -> dict:
+	"""Extract site usage metrics from the Ansible playbook result.
+
+	Looks for the 'Emit usage as JSON' debug task and returns the msg dict.
+	Falls back to zeros for any missing key.
+	"""
+	metrics = {
+		"database": 0.0,
+		"database_free": 0.0,
+		"public": 0.0,
+		"private": 0.0,
+		"backups": 0.0,
+	}
+
+	raw_json = ansible_data.get("raw_json", {})
+	for play in raw_json.get("plays", []):
+		for task in play.get("tasks", []):
+			task_name = task.get("task", {}).get("name", "")
+			if task_name != "Emit usage as JSON":
+				continue
+			for _host, host_data in task.get("hosts", {}).items():
+				msg = host_data.get("msg", {})
+				if isinstance(msg, dict):
+					for key in metrics:
+						try:
+							metrics[key] = float(msg.get(key) or 0)
+						except (TypeError, ValueError):
+							metrics[key] = 0.0
+				return metrics
+
+	return metrics
+
+
 @frappe.whitelist()
 def prepare_for_deployment(site_name: str) -> dict:
 	"""Wrapper function to call prepare_for_deployment on a Frappe Site document"""
@@ -301,3 +390,23 @@ def deploy_site(site_name: str) -> dict:
 	"""Wrapper function to call deploy_site on a Frappe Site document"""
 	doc = frappe.get_doc("Frappe Site", site_name)
 	return doc.deploy_site()
+
+
+def collect_all_sites_usage():
+	"""Scheduled task: collect usage metrics for all Deployed Frappe Sites."""
+	deployed_sites = frappe.get_all(
+		"Frappe Site",
+		filters={"status": "Deployed"},
+		pluck="name",
+	)
+	for site_name in deployed_sites:
+		try:
+			doc = frappe.get_doc("Frappe Site", site_name)
+			result = doc.collect_usage()
+			if result.get("status") != 200:
+				frappe.log_error(
+					f"collect_all_sites_usage: non-success result for {site_name}: {result.get('message')}",
+					"collect_all_sites_usage",
+				)
+		except Exception:
+			frappe.log_error(frappe.get_traceback(), f"collect_all_sites_usage failed for {site_name}")

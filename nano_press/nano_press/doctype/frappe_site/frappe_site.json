@@ -197,6 +197,10 @@
 		{
 			"link_doctype": "Ansible Log",
 			"link_fieldname": "bench_name"
+		},
+		{
+			"link_doctype": "Site Usage",
+			"link_fieldname": "site"
 		}
 	],
 	"modified": "2025-11-05 23:04:45.350674",
